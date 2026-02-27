@@ -25,6 +25,9 @@ TREE_LAST="└── "
 TREE_LINE="│   "
 TREE_NONE="    "
 
+# Bar width for disk gauge
+BAR_WIDTH=28
+
 # Config
 ROOT="${1:-.}"
 ROOT="$(cd "$ROOT" 2>/dev/null && pwd)" || { echo "Invalid directory: $1"; exit 1; }
@@ -36,6 +39,40 @@ trap 'rm -rf "$CACHE_DIR"' EXIT
 expanded_paths=""
 cursor=0
 declare -a visible_depths visible_paths visible_names visible_sizes visible_isdir visible_expanded visible_has_sibling
+
+# Get disk stats for the volume containing path (total, used, avail, pct)
+get_disk_stats() {
+  local path="$1"
+  local line
+  line=$(df -h "$path" 2>/dev/null | awk 'NR==2')
+  if [[ -z "$line" ]]; then
+    echo "?" "?" "?" "0"
+    return
+  fi
+  local total used avail pct
+  total=$(echo "$line" | awk '{print $2}')
+  used=$(echo "$line" | awk '{print $3}')
+  avail=$(echo "$line" | awk '{print $4}')
+  pct=$(echo "$line" | awk '{gsub(/%/,"",$5); print $5+0}')
+  [[ -z "$pct" || "$pct" -lt 0 ]] && pct=0
+  [[ "$pct" -gt 100 ]] && pct=100
+  echo "$total" "$used" "$avail" "$pct"
+}
+
+# Draw ASCII art disk gauge (total / used / bar)
+draw_disk_gauge() {
+  local total="$1" used="$2" avail="$3" pct="$4"
+  local filled empty i
+  (( filled = (pct * BAR_WIDTH) / 100 )) || filled=0
+  (( empty = BAR_WIDTH - filled )) || empty=BAR_WIDTH
+  [[ $filled -gt $BAR_WIDTH ]] && filled=$BAR_WIDTH && empty=0
+  [[ $empty -lt 0 ]] && empty=0
+  echo -e "${DIM}     ___${NORM}"
+  echo -e "${DIM}   /   \\${NORM}"
+  echo -e "${DIM}  | ${BOLD}${CYAN}DISK${NORM}${DIM} |${NORM}   ${BOLD}Total:${NORM} ${YELLOW}$total${NORM}   ${BOLD}Used:${NORM} ${RED}$used${NORM}   ${BOLD}Free:${NORM} ${GREEN}$avail${NORM}"
+  echo -e "${DIM}  |${NORM} ${GREEN}$(printf '%*s' "$filled" '' | tr ' ' '=')${NORM}${DIM}$(printf '%*s' "$empty" '' | tr ' ' '-')${NORM} ${DIM}|${NORM}  ${BOLD}${pct}%${NORM} used"
+  echo -e "${DIM}   \\___/${NORM}"
+}
 
 # Encode path for use as cache filename (safe for all chars)
 path_to_cache_key() {
@@ -194,6 +231,11 @@ line_prefix() {
 
 render() {
   clear 2>/dev/null || true
+  # Disk gauge (total / used / free) for the volume containing ROOT
+  local total used avail pct
+  IFS=' ' read -r total used avail pct <<< "$(get_disk_stats "$ROOT")"
+  draw_disk_gauge "$total" "$used" "$avail" "$pct"
+  echo ""
   echo -e "${BOLD}${CYAN}disky${NORM} — disc space — ${DIM}$ROOT${NORM}"
   echo -e "${DIM}↑/↓ move  Enter/→ expand  ← collapse  q quit${NORM}"
   echo ""
