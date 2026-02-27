@@ -43,10 +43,18 @@ cursor=0
 tree_scroll_offset=0
 NAVIGATING_UP=0
 TREE_DIRTY=1
+DISK_TOTAL="?"
+DISK_USED="?"
+DISK_AVAIL="?"
+DISK_PCT=0
 declare -a visible_depths visible_paths visible_names visible_sizes visible_isdir visible_expanded visible_has_sibling
 
 # Reserve this many lines for header (gauge, overview, title). Tree uses the rest.
 HEADER_LINES=14
+
+# For very large directories, skip expensive recursive size (`du`) per entry and
+# fall back to fast, approximate sizes so navigation stays responsive.
+LARGE_LIST_THRESHOLD=200
 
 # Get disk stats for the volume containing path (total, used, avail, pct)
 get_disk_stats() {
@@ -65,6 +73,11 @@ get_disk_stats() {
   [[ -z "$pct" || "$pct" -lt 0 ]] && pct=0
   [[ "$pct" -gt 100 ]] && pct=100
   echo "$total" "$used" "$avail" "$pct"
+}
+
+# Refresh global disk stats for current ROOT (call this only when ROOT changes).
+refresh_disk_stats() {
+  read -r DISK_TOTAL DISK_USED DISK_AVAIL DISK_PCT <<<"$(get_disk_stats "$ROOT")"
 }
 
 # Draw ASCII art disk gauge (total / used / bar)
@@ -136,6 +149,20 @@ kb_to_human() {
   fi
 }
 
+# Convert bytes to human-readable (K/M/G) for fast file sizes.
+bytes_to_human() {
+  local bytes=$1
+  if [[ $bytes -ge 1073741824 ]]; then
+    echo "$(( bytes / 1073741824 ))G"
+  elif [[ $bytes -ge 1048576 ]]; then
+    echo "$(( bytes / 1048576 ))M"
+  elif [[ $bytes -ge 1024 ]]; then
+    echo "$(( bytes / 1024 ))K"
+  else
+    echo "${bytes}B"
+  fi
+}
+
 draw_overview() {
   # Only read from cache; population runs in background at startup
   if [[ ! -f "$OVERVIEW_CACHE" || ! -s "$OVERVIEW_CACHE" ]]; then
@@ -168,21 +195,63 @@ get_listing() {
     return
   fi
   local list=""
-  local item size
   if [[ ! -d "$path" ]]; then
     return
   fi
+
+  # First collect entries so we know how many we have.
+  local -a items
+  local item
+  local count=0
   while IFS= read -r item; do
     [[ -z "$item" ]] && continue
     [[ "$item" == "." || "$item" == ".." ]] && continue
-    if [[ -d "$path/$item" ]]; then
-      size=$(du -sh "$path/$item" 2>/dev/null | cut -f1) || size="?"
-      list="$list${size}\t${item}\tdir\n"
-    else
-      size=$(du -h "$path/$item" 2>/dev/null | cut -f1) || size="?"
-      list="$list${size}\t${item}\tfile\n"
-    fi
+    items+=("$item")
+    ((count++)) || true
   done < <(ls -A "$path" 2>/dev/null)
+
+  if [[ $count -eq 0 ]]; then
+    echo -e "$list" > "$cache_file"
+    echo -e "$list"
+    return
+  fi
+
+  # For all directories, avoid recursive size (du) so expands are fast.
+  # Use cheap stat only for files in reasonably sized directories.
+  local full size type size_bytes
+  if [[ $count -gt $LARGE_LIST_THRESHOLD ]]; then
+    # Very large dir: no per-entry stat; just mark sizes as unknown.
+    for item in "${items[@]}"; do
+      full="$path/$item"
+      if [[ -d "$full" ]]; then
+        size="?"
+        type="dir"
+      else
+        size="?"
+        type="file"
+      fi
+      list="${list}${size}\t${item}\t${type}\n"
+    done
+  else
+    # Small/medium dir: use stat for files, leave dirs as "?" (metadata size is not useful).
+    for item in "${items[@]}"; do
+      full="$path/$item"
+      if [[ -d "$full" ]]; then
+        size="?"
+        type="dir"
+      else
+        size_bytes=$(stat -f%z "$full" 2>/dev/null || echo "?")
+        if [[ "$size_bytes" != "?" ]]; then
+          size=$(bytes_to_human "$size_bytes")
+        else
+          size="?"
+        fi
+        type="file"
+      fi
+      list="${list}${size}\t${item}\t${type}\n"
+    done
+  fi
+
   echo -e "$list" > "$cache_file"
   echo -e "$list"
 }
@@ -328,9 +397,7 @@ render() {
   home=$(tput home 2>/dev/null) || home=$'\033[H'
   printf '%s' "$home"
   # Disk gauge (total / used / free) for the volume containing ROOT
-  local total used avail pct
-  IFS=' ' read -r total used avail pct <<< "$(get_disk_stats "$ROOT")"
-  draw_disk_gauge "$total" "$used" "$avail" "$pct"
+  draw_disk_gauge "$DISK_TOTAL" "$DISK_USED" "$DISK_AVAIL" "$DISK_PCT"
   echo ""
   draw_overview
   echo ""
@@ -443,6 +510,7 @@ do_go_up() {
   tree_scroll_offset=0
   NAVIGATING_UP=1
   TREE_DIRTY=1
+  refresh_disk_stats
 }
 
 # Show loading screen while building tree (e.g. after navigating up).
@@ -556,6 +624,8 @@ main_loop() {
 
 # Start with root expanded so we see first level
 expanded_paths="$ROOT"$'\n'
+# Initial disk stats for current ROOT
+refresh_disk_stats
 # Populate overview (home or root top dirs) in background so first keypress may show it
 get_overview_data &
 main_loop
