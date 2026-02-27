@@ -33,11 +33,14 @@ ROOT="${1:-.}"
 ROOT="$(cd "$ROOT" 2>/dev/null && pwd)" || { echo "Invalid directory: $1"; exit 1; }
 CACHE_DIR="${TMPDIR:-/tmp}/disky_$$"
 mkdir -p "$CACHE_DIR"
-trap 'rm -rf "$CACHE_DIR"' EXIT
+# Restore terminal on exit so keypresses don't echo as ^[[A etc.
+saved_stty=""
+trap 'rm -rf "$CACHE_DIR"; [[ -n "$saved_stty" ]] && stty "$saved_stty" 2>/dev/null' EXIT
 
 # State
 expanded_paths=""
 cursor=0
+NAVIGATING_UP=0
 declare -a visible_depths visible_paths visible_names visible_sizes visible_isdir visible_expanded visible_has_sibling
 
 # Get disk stats for the volume containing path (total, used, avail, pct)
@@ -72,6 +75,76 @@ draw_disk_gauge() {
   echo -e "${DIM}  | ${BOLD}${CYAN}DISK${NORM}${DIM} |${NORM}   ${BOLD}Total:${NORM} ${YELLOW}$total${NORM}   ${BOLD}Used:${NORM} ${RED}$used${NORM}   ${BOLD}Free:${NORM} ${GREEN}$avail${NORM}"
   echo -e "${DIM}  |${NORM} ${GREEN}$(printf '%*s' "$filled" '' | tr ' ' '=')${NORM}${DIM}$(printf '%*s' "$empty" '' | tr ' ' '-')${NORM} ${DIM}|${NORM}  ${BOLD}${pct}%${NORM} used"
   echo -e "${DIM}   \\___/${NORM}"
+}
+
+# Overview: home or root (/) top-level dirs by size. Cached to avoid slow du on every redraw.
+OVERVIEW_CACHE="$CACHE_DIR/overview"
+overview_filled=0
+[[ "$ROOT" == "/" ]] && OVERVIEW_LABEL="Root (/)" || OVERVIEW_LABEL="Home (~)"
+
+get_overview_data() {
+  local scope_path
+  if [[ "$ROOT" == "/" ]]; then
+    scope_path="/"
+  else
+    scope_path="${HOME:-$ROOT}"
+  fi
+  # du -sk gives numbers for bar scaling; timeout when available (e.g. Linux/Homebrew)
+  local tmp
+  if command -v timeout &>/dev/null; then
+    tmp=$(timeout 4 du -sk "$scope_path"/*/ 2>/dev/null | sort -rn | head -8)
+  else
+    tmp=$(du -sk "$scope_path"/*/ 2>/dev/null | sort -rn | head -8)
+  fi
+  if [[ -z "$tmp" ]]; then
+    return
+  fi
+  local max_kb=0
+  while read -r size_kb path; do
+    [[ -z "$size_kb" || "$size_kb" =~ ^[^0-9] ]] && continue
+    [[ $size_kb -gt $max_kb ]] && max_kb=$size_kb
+  done <<< "$tmp"
+  [[ $max_kb -eq 0 ]] && return
+  while read -r size_kb path; do
+    [[ -z "$size_kb" || "$size_kb" =~ ^[^0-9] ]] && continue
+    local name
+    name=$(basename "$path" 2>/dev/null)
+    name="${name:0:14}"
+    local bar_len
+    (( bar_len = (size_kb * BAR_WIDTH) / max_kb )) || bar_len=0
+    [[ $bar_len -gt $BAR_WIDTH ]] && bar_len=$BAR_WIDTH
+    local human
+    human=$(kb_to_human "$size_kb")
+    echo "${bar_len}|${name}|${human}"
+  done <<< "$tmp" > "$OVERVIEW_CACHE"
+  overview_filled=1
+}
+
+kb_to_human() {
+  local kb=$1
+  if [[ $kb -ge 1048576 ]]; then
+    echo "$(( kb / 1048576 ))G"
+  elif [[ $kb -ge 1024 ]]; then
+    echo "$(( kb / 1024 ))M"
+  else
+    echo "${kb}K"
+  fi
+}
+
+draw_overview() {
+  # Only read from cache; population runs in background at startup
+  if [[ ! -f "$OVERVIEW_CACHE" || ! -s "$OVERVIEW_CACHE" ]]; then
+    echo -e "${DIM}  ${OVERVIEW_LABEL} top usage: (loading...)${NORM}"
+    return
+  fi
+  echo -e "${DIM}  ${OVERVIEW_LABEL} — largest:${NORM}"
+  local bar_len name human
+  while IFS='|' read -r bar_len name human; do
+    [[ -z "$bar_len" ]] && continue
+    local bar
+    bar=$(printf '%*s' "$bar_len" '' | tr ' ' '=')
+    printf "    ${CYAN}%-14s${NORM} ${GREEN}%s${NORM} ${DIM}%s${NORM}\n" "$name" "$bar" "$human"
+  done < "$OVERVIEW_CACHE"
 }
 
 # Encode path for use as cache filename (safe for all chars)
@@ -144,6 +217,19 @@ build_visible_tree() {
   visible_isdir=()
   visible_expanded=()
   visible_has_sibling=()
+
+  # ".." row to navigate up (only when not at filesystem root)
+  if [[ "$ROOT" != "/" ]]; then
+    local parent="${ROOT%/*}"
+    [[ -z "$parent" ]] && parent="/"
+    visible_depths+=(0)
+    visible_paths+=("$parent")
+    visible_names+=("..")
+    visible_sizes+=("")
+    visible_isdir+=(1)
+    visible_expanded+=(0)
+    visible_has_sibling+=(1)
+  fi
 
   # Root row
   local root_size
@@ -236,8 +322,10 @@ render() {
   IFS=' ' read -r total used avail pct <<< "$(get_disk_stats "$ROOT")"
   draw_disk_gauge "$total" "$used" "$avail" "$pct"
   echo ""
+  draw_overview
+  echo ""
   echo -e "${BOLD}${CYAN}disky${NORM} — disc space — ${DIM}$ROOT${NORM}"
-  echo -e "${DIM}↑/↓ move  Enter/→ expand  ← collapse  q quit${NORM}"
+  echo -e "${DIM}↑/↓ move  Enter/→ expand  ← collapse  u up  q quit${NORM}"
   echo ""
 
   local total=${#visible_names[@]}
@@ -265,12 +353,19 @@ render() {
     fi
 
     local display_name="$name"
-    [[ $isdir -eq 1 ]] && display_name="$name/"
+    [[ $isdir -eq 1 && "$name" != ".." ]] && display_name="$name/"
+    [[ "$name" == ".." ]] && display_name=".. (parent)"
 
     if [[ $i -eq $cursor ]]; then
-      echo -e "${BOLD}${GREEN}> ${NORM}${prefix}${BOLD}${display_name}${NORM}  ${YELLOW}${size}${NORM}"
+      if [[ "$name" == ".." ]]; then
+        echo -e "${BOLD}${GREEN}> ${NORM}${prefix}${BOLD}${display_name}${NORM}  ${DIM}(go up)${NORM}"
+      else
+        echo -e "${BOLD}${GREEN}> ${NORM}${prefix}${BOLD}${display_name}${NORM}  ${YELLOW}${size}${NORM}"
+      fi
     else
-      if [[ $isdir -eq 1 ]]; then
+      if [[ "$name" == ".." ]]; then
+        echo -e "  ${prefix}${DIM}${display_name}${NORM}  ${DIM}(go up)${NORM}"
+      elif [[ $isdir -eq 1 ]]; then
         [[ $expanded -eq 1 ]] && echo -e "  ${prefix}${BLUE}${display_name}${NORM}  ${DIM}${size}${NORM}" || echo -e "  ${prefix}${CYAN}${display_name}${NORM}  ${DIM}${size}${NORM}"
       else
         echo -e "  ${prefix}${display_name}  ${DIM}${size}${NORM}"
@@ -289,36 +384,83 @@ clamp_cursor() {
   [[ $cursor -lt 0 ]] && cursor=0
 }
 
+# Go up to parent directory (same as "cd .." then show that directory).
+do_go_up() {
+  [[ "$ROOT" == "/" ]] && return
+  local new_root
+  new_root=$(cd "$ROOT/.." 2>/dev/null && pwd)
+  if [[ -z "$new_root" ]]; then
+    new_root="${ROOT%/*}"
+    [[ -z "$new_root" ]] && new_root="/"
+  fi
+  ROOT="$new_root"
+  expanded_paths="$ROOT"$'\n'
+  cursor=0
+  NAVIGATING_UP=1
+}
+
+# Show loading screen while building tree (e.g. after navigating up).
+show_loading_screen() {
+  clear 2>/dev/null || true
+  echo -e "${BOLD}${CYAN}disky${NORM} — loading parent directory"
+  echo ""
+  echo -e "  ${YELLOW}Scanning:${NORM} $ROOT"
+  echo ""
+  echo -e "  ${DIM}Computing sizes (this may take a moment for large directories)...${NORM}"
+  echo ""
+}
+
+# Navigate up (when on first row and not at /) or expand directory. Used by Enter and Right.
+# Row 0 is always ".." when ROOT != "/", so we use index instead of name to avoid encoding issues.
+nav_up_or_expand() {
+  local total=${#visible_names[@]}
+  [[ $total -eq 0 ]] && return
+  if [[ $cursor -eq 0 && "$ROOT" != "/" ]]; then
+    do_go_up
+  else
+    local path="${visible_paths[$cursor]}"
+    local isdir=${visible_isdir[$cursor]}
+    [[ $isdir -eq 1 ]] && set_expanded "$path"
+  fi
+}
+
 main_loop() {
   local key
+  saved_stty=$(stty -g 2>/dev/null)
+  stty -echo 2>/dev/null
   while true; do
-    build_visible_tree
+    if [[ $NAVIGATING_UP -eq 1 ]]; then
+      show_loading_screen
+      build_visible_tree
+      NAVIGATING_UP=0
+    else
+      build_visible_tree
+    fi
     clamp_cursor
     render
 
     key=""
     read -rsn 1 key || key="q"
     if [[ "$key" == $'\x1b' ]]; then
-      read -rsn 2 key
+      read -rsn 2 key || key=""
       case "$key" in
-        '[A') # Up
+        *A) # Up
           ((cursor--)) || true
           [[ $cursor -lt 0 ]] && cursor=0
           ;;
-        '[B') # Down
+        *B) # Down
           ((cursor++)) || true
           ;;
-        '[C') # Right - expand
-          local path="${visible_paths[$cursor]}"
-          local isdir=${visible_isdir[$cursor]}
-          if [[ $isdir -eq 1 ]]; then
-            set_expanded "$path"
-          fi
+        *C) # Right - expand (or go up on "..")
+          [[ ${#visible_names[@]} -gt 0 ]] && nav_up_or_expand
           ;;
-        '[D') # Left - collapse
+        *D) # Left - collapse (no-op on parent row)
+          [[ ${#visible_names[@]} -eq 0 ]] && continue
           local path="${visible_paths[$cursor]}"
           local isdir=${visible_isdir[$cursor]}
-          if [[ $isdir -eq 1 ]]; then
+          if [[ $cursor -eq 0 && "$ROOT" != "/" ]]; then
+            :
+          elif [[ $isdir -eq 1 ]]; then
             set_collapsed "$path"
           else
             # Move cursor to parent directory row if possible
@@ -338,15 +480,21 @@ main_loop() {
     else
       case "$key" in
         'q'|'Q') exit 0 ;;
-        '')
-          # Enter
-          local path="${visible_paths[$cursor]}"
-          local isdir=${visible_isdir[$cursor]}
-          if [[ $isdir -eq 1 ]]; then
-            if is_expanded "$path"; then
-              set_collapsed "$path"
-            else
-              set_expanded "$path"
+        'u'|'U') do_go_up ;;
+        ''|$'\n'|$'\r')
+          # Enter: row 0 when not at / is always "go up"; otherwise expand/collapse
+          [[ ${#visible_names[@]} -eq 0 ]] && continue
+          if [[ $cursor -eq 0 && "$ROOT" != "/" ]]; then
+            do_go_up
+          else
+            local path="${visible_paths[$cursor]}"
+            local isdir=${visible_isdir[$cursor]}
+            if [[ $isdir -eq 1 ]]; then
+              if is_expanded "$path"; then
+                set_collapsed "$path"
+              else
+                set_expanded "$path"
+              fi
             fi
           fi
           ;;
@@ -359,4 +507,6 @@ main_loop() {
 
 # Start with root expanded so we see first level
 expanded_paths="$ROOT"$'\n'
+# Populate overview (home or root top dirs) in background so first keypress may show it
+get_overview_data &
 main_loop

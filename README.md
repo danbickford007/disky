@@ -28,6 +28,8 @@ Interactive disc space analysis with an expandable tree view. Browse any directo
 | **←**     | Collapse directory or move to parent |
 | **q**     | Quit                            |
 
+Select the **↑ ..** entry at the top of the tree and press **Enter** or **→** to navigate up to the parent directory.
+
 ## Requirements
 
 - Bash
