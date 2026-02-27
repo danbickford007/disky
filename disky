@@ -48,7 +48,7 @@ show_help() {
   echo "  q            quit"
   echo ""
   echo "Keys (in chart view):  c close chart  q quit"
-  echo "Keys (delete confirm): Enter/y delete  n/Escape cancel"
+  echo "Keys (delete confirm): type 'yes' to delete, Enter to cancel"
 }
 
 # Config
@@ -209,7 +209,7 @@ render_chart_view() {
   printf '\033[J'
 }
 
-# Render delete confirmation screen (clear screen, warning, Continue/No).
+# Render delete confirmation screen (clear screen, warning, type "yes" to confirm).
 render_delete_confirm() {
   if command -v tput >/dev/null 2>&1; then
     tput clear 2>/dev/null || printf '\033[2J\033[H'
@@ -228,8 +228,10 @@ render_delete_confirm() {
     echo -e "  ${BOLD}File:${NORM} $DELETE_TARGET_PATH\033[K"
   fi
   echo -e "\033[K"
-  echo -e "  ${GREEN}[Enter / y]${NORM} Continue — delete\033[K"
-  echo -e "  ${DIM}[n / Escape]${NORM} No — return to tree\033[K"
+  echo -e "  Type ${GREEN}yes${NORM} to delete (nothing else will confirm).\033[K"
+  echo -e "  ${DIM}Press Enter without typing to cancel and return to tree.${NORM}\033[K"
+  echo -e "\033[K"
+  echo -n "  Confirm: "
   printf '\033[J'
 }
 
@@ -717,21 +719,13 @@ main_loop() {
   while true; do
     if [[ $DELETE_CONFIRM_ACTIVE -eq 1 ]]; then
       render_delete_confirm
-      key=""
-      read -rsn 1 key || key="n"
-      if [[ "$key" == $'\x1b' ]]; then
-        read -rsn 2 key || key=""
-        DELETE_CONFIRM_ACTIVE=0
-        continue
+      # Temporarily allow canonical input so user can type "yes"
+      stty icanon echo 2>/dev/null || true
+      read -r reply || reply=""
+      stty -icanon -echo 2>/dev/null || true
+      if [[ "$reply" == "yes" ]]; then
+        do_delete_target
       fi
-      case "$key" in
-        ''|$'\n'|$'\r'|'y'|'Y')
-          do_delete_target
-          ;;
-        'n'|'N'|*)
-          :
-          ;;
-      esac
       DELETE_CONFIRM_ACTIVE=0
       continue
     fi

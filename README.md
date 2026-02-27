@@ -32,7 +32,7 @@ disky — disc space — /Users/me/Src/disky
 - **Session caching**: Directory listings and file sizes are cached (per process) so revisiting directories is fast.
 - **Keyboard‑only navigation**: Optimized for arrow keys and `j`/`k`, no mouse required.
 - **Per‑directory usage chart**: Press **g** or **p** on a directory (or file) to open a full‑screen view showing how much space each child uses; press **c** to close the chart and return to the tree.
-- **Delete**: Press **d** on a file or directory to delete it (with confirmation); **Enter**/y to confirm, **n**/Escape to cancel.
+- **Delete**: Press **d** on a file or directory to delete it; you must type **yes** to confirm (Enter or anything else cancels).
 
 ---
 
@@ -121,7 +121,7 @@ When the interface starts:
 
 ### Delete (d)
 
-With a file or directory selected (not `..` or `.`), press **d** to delete. The screen clears and shows a confirmation with a warning. Choose **Enter** or **y** to delete (and return to the tree), or **n** or **Escape** to cancel and return to the tree. Deleting a directory removes it and all its contents.
+With a file or directory selected (not `..` or `.`), press **d** to delete. The screen clears and shows a confirmation with a warning. You must type the word **yes** (and press Enter) to confirm; pressing Enter without typing **yes**, or typing anything else, cancels and returns to the tree. Deleting a directory removes it and all its contents.
 
 ### Tree rows
 
