@@ -40,8 +40,13 @@ trap 'rm -rf "$CACHE_DIR"; [[ -n "$saved_stty" ]] && stty "$saved_stty" 2>/dev/n
 # State
 expanded_paths=""
 cursor=0
+tree_scroll_offset=0
 NAVIGATING_UP=0
+TREE_DIRTY=1
 declare -a visible_depths visible_paths visible_names visible_sizes visible_isdir visible_expanded visible_has_sibling
+
+# Reserve this many lines for header (gauge, overview, title). Tree uses the rest.
+HEADER_LINES=14
 
 # Get disk stats for the volume containing path (total, used, avail, pct)
 get_disk_stats() {
@@ -198,6 +203,7 @@ set_expanded() {
   if ! is_expanded "$path"; then
     expanded_paths="$expanded_paths$path"$'\n'
   fi
+  TREE_DIRTY=1
 }
 
 set_collapsed() {
@@ -206,6 +212,7 @@ set_collapsed() {
   expanded_paths=$(echo "$expanded_paths" | while IFS= read -r p; do
     [[ -n "$p" && "$p" != "$path" && "$p" != "$path"/* ]] && echo "$p"
   done)
+  TREE_DIRTY=1
 }
 
 # Build flattened visible tree (depths, paths, names, sizes, isdir, expanded, has_sibling)
@@ -329,8 +336,21 @@ render() {
   echo ""
 
   local total=${#visible_names[@]}
-  local i=0
-  while [[ $i -lt $total ]]; do
+  # How many tree lines fit (same as clamp_cursor)
+  local term_lines
+  term_lines=$(tput lines 2>/dev/null)
+  [[ -z "$term_lines" || "$term_lines" -lt 10 ]] && term_lines=24
+  local tree_height=$(( term_lines - HEADER_LINES ))
+  [[ $tree_height -lt 3 ]] && tree_height=3
+  # If list fits, show all; else show viewport
+  local start=0 end=$total
+  if [[ $total -gt $tree_height ]]; then
+    start=$tree_scroll_offset
+    end=$(( tree_scroll_offset + tree_height ))
+    [[ $end -gt $total ]] && end=$total
+  fi
+  local i=$start
+  while [[ $i -lt $end ]]; do
     local depth=${visible_depths[$i]}
     local name="${visible_names[$i]}"
     local size="${visible_sizes[$i]}"
@@ -373,15 +393,36 @@ render() {
     fi
     ((i++)) || true
   done
+  if [[ $total -gt $tree_height ]]; then
+    echo -e "${DIM}  — $(( start + 1 ))-$end of $total —${NORM}"
+  fi
 }
 
-# Ensure cursor is in valid range
+# Ensure cursor is in valid range; keep scroll so cursor stays in visible window.
 clamp_cursor() {
   local total=${#visible_names[@]}
   if [[ $cursor -ge $total ]]; then
     cursor=$(( total - 1 ))
   fi
   [[ $cursor -lt 0 ]] && cursor=0
+  # Viewport: how many tree lines fit on screen
+  local term_lines
+  term_lines=$(tput lines 2>/dev/null)
+  [[ -z "$term_lines" || "$term_lines" -lt 10 ]] && term_lines=24
+  local tree_height=$(( term_lines - HEADER_LINES ))
+  [[ $tree_height -lt 3 ]] && tree_height=3
+  # Keep cursor in view
+  if [[ $cursor -lt $tree_scroll_offset ]]; then
+    tree_scroll_offset=$cursor
+  fi
+  if [[ $cursor -ge $(( tree_scroll_offset + tree_height )) ]]; then
+    tree_scroll_offset=$(( cursor - tree_height + 1 ))
+  fi
+  # Clamp scroll to valid range
+  if [[ $(( tree_scroll_offset + tree_height )) -gt $total ]]; then
+    tree_scroll_offset=$(( total - tree_height ))
+  fi
+  [[ $tree_scroll_offset -lt 0 ]] && tree_scroll_offset=0
 }
 
 # Go up to parent directory (same as "cd .." then show that directory).
@@ -396,7 +437,9 @@ do_go_up() {
   ROOT="$new_root"
   expanded_paths="$ROOT"$'\n'
   cursor=0
+  tree_scroll_offset=0
   NAVIGATING_UP=1
+  TREE_DIRTY=1
 }
 
 # Show loading screen while building tree (e.g. after navigating up).
@@ -427,14 +470,17 @@ nav_up_or_expand() {
 main_loop() {
   local key
   saved_stty=$(stty -g 2>/dev/null)
-  stty -echo 2>/dev/null
+  stty -icanon -echo 2>/dev/null
   while true; do
-    if [[ $NAVIGATING_UP -eq 1 ]]; then
-      show_loading_screen
-      build_visible_tree
-      NAVIGATING_UP=0
-    else
-      build_visible_tree
+    if [[ $TREE_DIRTY -eq 1 ]]; then
+      if [[ $NAVIGATING_UP -eq 1 ]]; then
+        show_loading_screen
+        build_visible_tree
+        NAVIGATING_UP=0
+      else
+        build_visible_tree
+      fi
+      TREE_DIRTY=0
     fi
     clamp_cursor
     render
