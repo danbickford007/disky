@@ -2,6 +2,28 @@
 
 `disky` is a single-file Bash TUI for **interactive disk usage exploration**.
 
+```
+     ___
+   /     \
+  | DISK |
+  |   Total: 926Gi
+  |   Used:  515Gi
+  |   Free:  336Gi
+  | =================----------- |  61% used
+   \___/
+
+disky — disc space — /Users/me/Src/disky
+↑/↓ move  Enter/→ expand  ← collapse  u up  q quit
+
+> ├── .. (parent)  (go up)
+  ├── ./  320K
+  │   ├── .git/  ?
+  │   ├── disky  16K
+  │   ├── LICENSE  1K
+  │   └── README.md  5K
+
+```
+
 ### Key capabilities
 
 - **Full‑screen TUI**: Renders a persistent interface in your terminal with a disk gauge and a scrollable tree.
