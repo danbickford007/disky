@@ -28,7 +28,34 @@ TREE_NONE="    "
 # Bar width for disk gauge
 BAR_WIDTH=28
 
+show_help() {
+  echo "disky — interactive disc space analysis with tree view"
+  echo ""
+  echo "Usage: disky [OPTION] [DIRECTORY]"
+  echo ""
+  echo "Start with DIRECTORY as root (default: current directory)."
+  echo ""
+  echo "Options:"
+  echo "  -h, --help    show this help and exit"
+  echo ""
+  echo "Keys (in tree view):"
+  echo "  ↑/k, ↓/j     move cursor"
+  echo "  Enter, →      expand / enter directory (or go up on \"..\")"
+  echo "  ←            collapse directory"
+  echo "  u            go up to parent directory"
+  echo "  g, p         open usage chart for selected row's directory"
+  echo "  d            delete selected file or directory (confirmation screen)"
+  echo "  q            quit"
+  echo ""
+  echo "Keys (in chart view):  c close chart  q quit"
+  echo "Keys (delete confirm): Enter/y delete  n/Escape cancel"
+}
+
 # Config
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+  show_help
+  exit 0
+fi
 ROOT="${1:-.}"
 ROOT="$(cd "$ROOT" 2>/dev/null && pwd)" || { echo "Invalid directory: $1"; exit 1; }
 CACHE_DIR="${TMPDIR:-/tmp}/disky_$$"

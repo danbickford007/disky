@@ -13,7 +13,7 @@
    \___/
 
 disky — disc space — /Users/me/Src/disky
-↑/↓ move  Enter/→ expand  ← collapse  u up  g/p chart  q quit
+↑/↓ move  Enter/→ expand  ← collapse  u up  g/p chart  d delete  q quit
 
 > ├── .. (parent)  (go up)
   ├── ./  320K
@@ -32,6 +32,7 @@ disky — disc space — /Users/me/Src/disky
 - **Session caching**: Directory listings and file sizes are cached (per process) so revisiting directories is fast.
 - **Keyboard‑only navigation**: Optimized for arrow keys and `j`/`k`, no mouse required.
 - **Per‑directory usage chart**: Press **g** or **p** on a directory (or file) to open a full‑screen view showing how much space each child uses; press **c** to close the chart and return to the tree.
+- **Delete**: Press **d** on a file or directory to delete it (with confirmation); **Enter**/y to confirm, **n**/Escape to cancel.
 
 ---
 
@@ -50,6 +51,8 @@ You can then run it directly with:
 ./disky             # analyze current directory
 ./disky /var        # analyze /var
 ./disky ~/Projects  # analyze your Projects folder
+./disky -h          # show help
+./disky --help      # show help
 ```
 
 ### Optional: put `disky` on your PATH
@@ -64,6 +67,15 @@ After that:
 disky
 disky /some/path
 ```
+
+---
+
+## CLI options
+
+| Option        | Description                                      |
+|---------------|--------------------------------------------------|
+| `-h`, `--help`| Show usage and key bindings, then exit.          |
+| `[directory]` | Optional. Start with this directory as root; default is current directory (`.`). |
 
 ---
 
