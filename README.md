@@ -41,7 +41,6 @@ disky — disc space — /Users/me/Src/disky
 ```bash
 git clone https://github.com/danbickford007/disky.git
 cd disky
-chmod +x disky
 ```
 
 You can then run it directly with:
