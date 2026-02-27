@@ -101,14 +101,14 @@ draw_disk_gauge() {
   (( empty = BAR_WIDTH - filled )) || empty=BAR_WIDTH
   [[ $filled -gt $BAR_WIDTH ]] && filled=$BAR_WIDTH && empty=0
   [[ $empty -lt 0 ]] && empty=0
-  echo -e "${DIM}     ___${NORM}"
-  echo -e "${DIM}   /     \\${NORM}"
-  echo -e "${DIM}  | ${BOLD}${CYAN}DISK${NORM}${DIM} |${NORM}"
-  echo -e "${DIM}  |${NORM}   ${BOLD}Total:${NORM} ${YELLOW}$total${NORM}"
-  echo -e "${DIM}  |${NORM}   ${BOLD}Used:${NORM}  ${RED}$used${NORM}"
-  echo -e "${DIM}  |${NORM}   ${BOLD}Free:${NORM}  ${GREEN}$avail${NORM}"
-  echo -e "${DIM}  |${NORM} ${GREEN}$(printf '%*s' "$filled" '' | tr ' ' '=')${NORM}${DIM}$(printf '%*s' "$empty" '' | tr ' ' '-')${NORM} ${DIM}|${NORM}  ${BOLD}${pct}%${NORM} used"
-  echo -e "${DIM}   \\___/${NORM}"
+  echo -e "${DIM}     ___${NORM}\033[K"
+  echo -e "${DIM}   /     \\${NORM}\033[K"
+  echo -e "${DIM}  | ${BOLD}${CYAN}DISK${NORM}${DIM} |${NORM}\033[K"
+  echo -e "${DIM}  |${NORM}   ${BOLD}Total:${NORM} ${YELLOW}$total${NORM}\033[K"
+  echo -e "${DIM}  |${NORM}   ${BOLD}Used:${NORM}  ${RED}$used${NORM}\033[K"
+  echo -e "${DIM}  |${NORM}   ${BOLD}Free:${NORM}  ${GREEN}$avail${NORM}\033[K"
+  echo -e "${DIM}  |${NORM} ${GREEN}$(printf '%*s' "$filled" '' | tr ' ' '=')${NORM}${DIM}$(printf '%*s' "$empty" '' | tr ' ' '-')${NORM} ${DIM}|${NORM}  ${BOLD}${pct}%${NORM} used\033[K"
+  echo -e "${DIM}   \\___/${NORM}\033[K"
 }
 
 # Convert bytes to human-readable (K/M/G) for fast file sizes.
@@ -179,11 +179,14 @@ get_listing() {
       list="${list}${size}\t${item}\t${type}\n"
     done
   else
-    # Small/medium dir: use stat for files, leave dirs as "?" (metadata size is not useful).
+    # Small/medium dir: show real disk-usage for directories (du -sh, cached)
+    # and cheap metadata size for files via stat.
     for item in "${items[@]}"; do
       full="$path/$item"
       if [[ -d "$full" ]]; then
-        size="?"
+        # Use du -sh for human readable directory size; fall back to "?" on error.
+        size=$(du -sh "$full" 2>/dev/null | awk 'NR==1 {print $1}')
+        [[ -z "$size" ]] && size="?"
         type="dir"
       else
         size_bytes=$(stat -f%z "$full" 2>/dev/null || echo "?")
@@ -344,10 +347,10 @@ render() {
   printf '%s' "$home"
   # Disk gauge (total / used / free) for the volume containing ROOT
   draw_disk_gauge "$DISK_TOTAL" "$DISK_USED" "$DISK_AVAIL" "$DISK_PCT"
-  echo ""
-  echo -e "${BOLD}${CYAN}disky${NORM} — disc space — ${DIM}$ROOT${NORM}"
-  echo -e "${DIM}↑/↓ move  Enter/→ expand  ← collapse  u up  q quit${NORM}"
-  echo ""
+  echo -e "\033[K"
+  echo -e "${BOLD}${CYAN}disky${NORM} — disc space — ${DIM}$ROOT${NORM}\033[K"
+  echo -e "${DIM}↑/↓ move  Enter/→ expand  ← collapse  u up  q quit${NORM}\033[K"
+  echo -e "\033[K"
 
   local total=${#visible_names[@]}
   # How many tree lines fit (same as clamp_cursor)
@@ -392,24 +395,26 @@ render() {
 
     if [[ $i -eq $cursor ]]; then
       if [[ "$name" == ".." ]]; then
-        echo -e "${BOLD}${GREEN}> ${NORM}${prefix}${BOLD}${display_name}${NORM}  ${DIM}(go up)${NORM}"
+        echo -e "${BOLD}${GREEN}> ${NORM}${prefix}${BOLD}${display_name}${NORM}  ${DIM}(go up)${NORM}\033[K"
       else
-        echo -e "${BOLD}${GREEN}> ${NORM}${prefix}${BOLD}${display_name}${NORM}  ${YELLOW}${size}${NORM}"
+        echo -e "${BOLD}${GREEN}> ${NORM}${prefix}${BOLD}${display_name}${NORM}  ${YELLOW}${size}${NORM}\033[K"
       fi
     else
       if [[ "$name" == ".." ]]; then
-        echo -e "  ${prefix}${DIM}${display_name}${NORM}  ${DIM}(go up)${NORM}"
+        echo -e "  ${prefix}${DIM}${display_name}${NORM}  ${DIM}(go up)${NORM}\033[K"
       elif [[ $isdir -eq 1 ]]; then
-        [[ $expanded -eq 1 ]] && echo -e "  ${prefix}${BLUE}${display_name}${NORM}  ${DIM}${size}${NORM}" || echo -e "  ${prefix}${CYAN}${display_name}${NORM}  ${DIM}${size}${NORM}"
+        [[ $expanded -eq 1 ]] && echo -e "  ${prefix}${BLUE}${display_name}${NORM}  ${DIM}${size}${NORM}\033[K" || echo -e "  ${prefix}${CYAN}${display_name}${NORM}  ${DIM}${size}${NORM}\033[K"
       else
-        echo -e "  ${prefix}${display_name}  ${DIM}${size}${NORM}"
+        echo -e "  ${prefix}${display_name}  ${DIM}${size}${NORM}\033[K"
       fi
     fi
     ((i++)) || true
   done
   if [[ $total -gt $tree_height ]]; then
-    echo -e "${DIM}  — $(( start + 1 ))-$end of $total —${NORM}"
+    echo -e "${DIM}  — $(( start + 1 ))-$end of $total —${NORM}\033[K"
   fi
+  # Clear any remaining content below the current cursor position to avoid visual artifacts
+  printf '\033[J'
 }
 
 # Ensure cursor is in valid range; keep scroll so cursor stays in visible window.
