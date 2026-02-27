@@ -2,35 +2,11 @@
 
 `disky` is a single-file Bash TUI for **interactive disk usage exploration**.
 
-It shows an ASCII gauge of disk usage, a quick overview of your heaviest top‑level directories, and a navigable tree so you can drill into where space is going without waiting on `du` for every subtree.
-
-```
-     ___
-   /   \033[0m
-  | DISK |   Total: 926Gi 515Gi 336Gi 61   Used:    Free:
-  | ---------------------------- |  % used
-   \___/
-
-  Home (~) top usage: (loading...)
-
-disky — disc space — /Users/userhere/Src/disky
-↑/↓ move  Enter/→ expand  ← collapse  u up  q quit
-
-> ├── .. (parent)  (go up)
-  ├── ./  280K
-  │   ├── .git/  ?
-  │   ├── disky  18K
-  │   ├── LICENSE  1K
-  │   └── README.md  6K
-
-```
-
 ### Key capabilities
 
-- **Full‑screen TUI**: Renders a persistent interface in your terminal with a disk gauge, overview section, and a scrollable tree.
+- **Full‑screen TUI**: Renders a persistent interface in your terminal with a disk gauge and a scrollable tree.
 - **Tree view**: Files and directories rendered with box‑drawing characters (`├──`, `└──`, `│`) and sizes.
 - **Per‑directory navigation**: Pressing Enter/Right on a directory *enters* that directory and rebuilds the tree with it as the new root.
-- **Top‑level overview**: Shows the biggest directories in your home directory (or `/` when rooted there) with bar graphs.
 - **Session caching**: Directory listings and file sizes are cached (per process) so revisiting directories is fast.
 - **Keyboard‑only navigation**: Optimized for arrow keys and `j`/`k`, no mouse required.
 
@@ -92,7 +68,6 @@ When the interface starts:
 - The terminal screen is cleared.
 - A header shows:
   - A **disk gauge** for the filesystem containing the root path.
-  - An **overview** of the largest directories under your home (or `/`).
   - A **hint line** with the key bindings.
 - The main area shows the tree for the current root.
 
@@ -125,9 +100,7 @@ Each row shows:
 
 ---
 
-## Disk gauge & overview
-
-### Disk gauge
+## Disk gauge
 
 At the very top:
 
@@ -136,23 +109,12 @@ At the very top:
 
 This updates automatically whenever you change the root directory.
 
-### Overview section
-
-Below the gauge:
-
-- Shows the **largest directories** in:
-  - Your home directory when rooted anywhere under `$HOME`.
-  - `/` when the root is `/`.
-- Uses `du -sk` + a short timeout (when available) to avoid locking up on very large trees.
-- Populates in the background; while it’s loading you’ll see a “(loading…)” message.
-
 ---
 
 ## Performance & caching
 
 - Directory listings and file sizes for the current process are cached under a temporary directory (e.g. `/tmp/disky_<pid>`).
 - Large directories (more than a configurable threshold of entries) skip per‑file `stat` and just show `?` sizes to keep navigation responsive.
-- Overview caching avoids recomputing global `du` every repaint.
 - The cache is cleaned up automatically on exit via a trap.
 
 ---
@@ -160,8 +122,7 @@ Below the gauge:
 ## Requirements
 
 - **Bash** (the `disky` script uses Bash‑specific features).
-- Standard Unix tools: `ls`, `du`, `df`, `stat`, `tput`, `stty`, `timeout` (optional).
-  - `timeout` is used if available to limit long‑running `du` calls; `disky` still works without it.
+- Standard Unix tools: `ls`, `du`, `df`, `stat`, `tput`, `stty`.
 - A real terminal (TTY); behavior is undefined in non‑interactive environments.
 
 ---
@@ -181,10 +142,6 @@ Below the gauge:
 - **The interface looks garbled or doesn’t clear correctly**
   - Make sure you are running `disky` in a real terminal, not inside something that captures/filters ANSI escapes.
   - Check that `TERM` is set to a reasonable value (e.g. `xterm-256color`).
-
-- **No overview data / “(loading…)” never disappears**
-  - Running `du` over your home or root filesystem can be slow on very large disks.
-  - If it never appears, try running `du -sk ~/*/` manually to see if it completes; otherwise, you may want to add ignores or reduce dataset size.
 
 - **High CPU usage while idle**
   - `disky` should only repaint when something changes (tree dirty or input).
