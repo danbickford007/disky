@@ -323,7 +323,10 @@ line_prefix() {
 }
 
 render() {
-  clear 2>/dev/null || true
+  # Move cursor to top without clearing entire screen to avoid flashing
+  local home
+  home=$(tput home 2>/dev/null) || home=$'\033[H'
+  printf '%s' "$home"
   # Disk gauge (total / used / free) for the volume containing ROOT
   local total used avail pct
   IFS=' ' read -r total used avail pct <<< "$(get_disk_stats "$ROOT")"
