@@ -4,6 +4,27 @@
 
 It shows an ASCII gauge of disk usage, a quick overview of your heaviest top‑level directories, and a navigable tree so you can drill into where space is going without waiting on `du` for every subtree.
 
+```
+     ___
+   /   \033[0m
+  | DISK |   Total: 926Gi 515Gi 336Gi 61   Used:    Free:
+  | ---------------------------- |  % used
+   \___/
+
+  Home (~) top usage: (loading...)
+
+disky — disc space — /Users/userhere/Src/disky
+↑/↓ move  Enter/→ expand  ← collapse  u up  q quit
+
+> ├── .. (parent)  (go up)
+  ├── ./  280K
+  │   ├── .git/  ?
+  │   ├── disky  18K
+  │   ├── LICENSE  1K
+  │   └── README.md  6K
+
+```
+
 ### Key capabilities
 
 - **Full‑screen TUI**: Renders a persistent interface in your terminal with a disk gauge, overview section, and a scrollable tree.
