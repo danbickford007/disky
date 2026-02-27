@@ -513,10 +513,23 @@ do_go_up() {
   refresh_disk_stats
 }
 
-# Show loading screen while building tree (e.g. after navigating up).
+do_go_into() {
+  local new_root="$1"
+  [[ -z "$new_root" ]] && return
+  [[ ! -d "$new_root" ]] && return
+  ROOT="$new_root"
+  expanded_paths="$ROOT"$'\n'
+  cursor=0
+  tree_scroll_offset=0
+  NAVIGATING_UP=1
+  TREE_DIRTY=1
+  refresh_disk_stats
+}
+
+# Show loading screen while building tree (e.g. after navigating).
 show_loading_screen() {
   clear 2>/dev/null || true
-  echo -e "${BOLD}${CYAN}disky${NORM} — loading parent directory"
+  echo -e "${BOLD}${CYAN}disky${NORM} — loading directory"
   echo ""
   echo -e "  ${YELLOW}Scanning:${NORM} $ROOT"
   echo ""
@@ -534,7 +547,7 @@ nav_up_or_expand() {
   else
     local path="${visible_paths[$cursor]}"
     local isdir=${visible_isdir[$cursor]}
-    [[ $isdir -eq 1 ]] && set_expanded "$path"
+    [[ $isdir -eq 1 ]] && do_go_into "$path"
   fi
 }
 
@@ -599,20 +612,14 @@ main_loop() {
         'q'|'Q') exit 0 ;;
         'u'|'U') do_go_up ;;
         ''|$'\n'|$'\r')
-          # Enter: row 0 when not at / is always "go up"; otherwise expand/collapse
+          # Enter: row 0 when not at / is always "go up"; otherwise enter directory
           [[ ${#visible_names[@]} -eq 0 ]] && continue
           if [[ $cursor -eq 0 && "$ROOT" != "/" ]]; then
             do_go_up
           else
             local path="${visible_paths[$cursor]}"
             local isdir=${visible_isdir[$cursor]}
-            if [[ $isdir -eq 1 ]]; then
-              if is_expanded "$path"; then
-                set_collapsed "$path"
-              else
-                set_expanded "$path"
-              fi
-            fi
+            [[ $isdir -eq 1 ]] && do_go_into "$path"
           fi
           ;;
         'j') ((cursor++)) || true ;;
@@ -628,4 +635,12 @@ expanded_paths="$ROOT"$'\n'
 refresh_disk_stats
 # Populate overview (home or root top dirs) in background so first keypress may show it
 get_overview_data &
+
+# Clear the current screen buffer once before showing the interface
+if command -v tput >/dev/null 2>&1; then
+  tput clear 2>/dev/null || printf '\033[2J\033[H'
+else
+  printf '\033[2J\033[H'
+fi
+
 main_loop
