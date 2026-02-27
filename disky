@@ -1,0 +1,320 @@
+#!/usr/bin/env bash
+#
+# disky - Interactive disc space analysis with expandable tree view
+# Usage: ./disky [directory]   OR   bash disky [directory]
+# (Do not run with Python; this is a Bash script.)
+#
+
+# Don't use set -e: clear/du/read can fail in normal use (non-TTY, permissions)
+set +e
+IFS=$'\n'
+
+# Colors (optional, can disable if terminal doesn't support)
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NORM='\033[0m'
+
+# Box-drawing characters for tree
+TREE_BRANCH="├── "
+TREE_LAST="└── "
+TREE_LINE="│   "
+TREE_NONE="    "
+
+# Config
+ROOT="${1:-.}"
+ROOT="$(cd "$ROOT" 2>/dev/null && pwd)" || { echo "Invalid directory: $1"; exit 1; }
+CACHE_DIR="${TMPDIR:-/tmp}/disky_$$"
+mkdir -p "$CACHE_DIR"
+trap 'rm -rf "$CACHE_DIR"' EXIT
+
+# State
+expanded_paths=""
+cursor=0
+declare -a visible_depths visible_paths visible_names visible_sizes visible_isdir visible_expanded visible_has_sibling
+
+# Encode path for use as cache filename (safe for all chars)
+path_to_cache_key() {
+  echo -n "$1" | od -A n -t x1 | tr -d ' \n'
+}
+
+# Get directory listing with sizes (cached)
+get_listing() {
+  local path="$1"
+  local key
+  key=$(path_to_cache_key "$path")
+  local cache_file="$CACHE_DIR/$key"
+  if [[ -f "$cache_file" ]]; then
+    cat "$cache_file"
+    return
+  fi
+  local list=""
+  local item size
+  if [[ ! -d "$path" ]]; then
+    return
+  fi
+  while IFS= read -r item; do
+    [[ -z "$item" ]] && continue
+    [[ "$item" == "." || "$item" == ".." ]] && continue
+    if [[ -d "$path/$item" ]]; then
+      size=$(du -sh "$path/$item" 2>/dev/null | cut -f1) || size="?"
+      list="$list${size}\t${item}\tdir\n"
+    else
+      size=$(du -h "$path/$item" 2>/dev/null | cut -f1) || size="?"
+      list="$list${size}\t${item}\tfile\n"
+    fi
+  done < <(ls -A "$path" 2>/dev/null)
+  echo -e "$list" > "$cache_file"
+  echo -e "$list"
+}
+
+is_expanded() {
+  local path="$1"
+  case "$expanded_paths" in
+    *$'\n'"$path"$'\n'*) return 0 ;;
+    *$'\n'"$path") return 0 ;;
+    "$path"$'\n'*) return 0 ;;
+    "$path") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+set_expanded() {
+  local path="$1"
+  if ! is_expanded "$path"; then
+    expanded_paths="$expanded_paths$path"$'\n'
+  fi
+}
+
+set_collapsed() {
+  local path="$1"
+  # Remove this path and any path under it (safe for special chars in path)
+  expanded_paths=$(echo "$expanded_paths" | while IFS= read -r p; do
+    [[ -n "$p" && "$p" != "$path" && "$p" != "$path"/* ]] && echo "$p"
+  done)
+}
+
+# Build flattened visible tree (depths, paths, names, sizes, isdir, expanded, has_sibling)
+build_visible_tree() {
+  visible_depths=()
+  visible_paths=()
+  visible_names=()
+  visible_sizes=()
+  visible_isdir=()
+  visible_expanded=()
+  visible_has_sibling=()
+
+  # Root row
+  local root_size
+  root_size=$(du -sh "$ROOT" 2>/dev/null | cut -f1) || root_size="?"
+  visible_depths+=(0)
+  visible_paths+=("$ROOT")
+  visible_names+=(".")
+  visible_sizes+=("${root_size:-?}")
+  visible_isdir+=(1)
+  visible_expanded+=(1)
+  visible_has_sibling+=(1)  # root always has children below
+  _build_visible "$ROOT" "." 1
+}
+
+_build_visible() {
+  local path="$1"
+  local name="$2"
+  local depth=$3
+  local listing line size n isdir has_sibling
+  local -a names sizes isdirs paths
+
+  if [[ -n "$name" ]]; then
+    # Add this directory's children (directory itself was already added by parent)
+    listing=$(get_listing "$path")
+    if [[ -z "$listing" ]]; then
+      # Empty or unreadable - nothing to add
+      return
+    fi
+    # Count lines for has_sibling
+    local count=0
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      ((count++)) || true
+    done <<< "$(echo -e "$listing")"
+    local idx=0
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      size=$(echo "$line" | cut -f1)
+      n=$(echo "$line" | cut -f2)
+      isdir=$(echo "$line" | cut -f3)
+      ((idx++)) || true
+      has_sibling=$(( idx < count ? 1 : 0 ))
+      visible_depths+=("$depth")
+      visible_paths+=("$path/$n")
+      visible_names+=("$n")
+      visible_sizes+=("$size")
+      visible_isdir+=("$([[ "$isdir" == "dir" ]] && echo 1 || echo 0)")
+      if [[ "$isdir" == "dir" ]]; then
+        if is_expanded "$path/$n"; then
+          visible_expanded+=("1")
+          visible_has_sibling+=("$has_sibling")
+          _build_visible "$path/$n" "$n" $(( depth + 1 ))
+        else
+          visible_expanded+=("0")
+          visible_has_sibling+=("$has_sibling")
+        fi
+      else
+        visible_expanded+=("0")
+        visible_has_sibling+=("$has_sibling")
+      fi
+    done <<< "$(echo -e "$listing")"
+    return
+  fi
+}
+
+# Draw one line prefix (tree branches)
+line_prefix() {
+  local depth=$1
+  local has_sibling=$2
+  local d=0
+  local out=""
+  while [[ $d -lt $depth ]]; do
+    # We need to know if any ancestor has a sibling - we don't have that here.
+    # Use simple approach: all use TREE_LINE except at our depth.
+    out="$out$TREE_LINE"
+    ((d++)) || true
+  done
+  if [[ $has_sibling -eq 1 ]]; then
+    out="$out$TREE_BRANCH"
+  else
+    out="$out$TREE_LAST"
+  fi
+  echo -n "$out"
+}
+
+render() {
+  clear 2>/dev/null || true
+  echo -e "${BOLD}${CYAN}disky${NORM} — disc space — ${DIM}$ROOT${NORM}"
+  echo -e "${DIM}↑/↓ move  Enter/→ expand  ← collapse  q quit${NORM}"
+  echo ""
+
+  local total=${#visible_names[@]}
+  local i=0
+  while [[ $i -lt $total ]]; do
+    local depth=${visible_depths[$i]}
+    local name="${visible_names[$i]}"
+    local size="${visible_sizes[$i]}"
+    local isdir=${visible_isdir[$i]}
+    local expanded=${visible_expanded[$i]}
+    local has_sibling=${visible_has_sibling[$i]}
+
+    # Tree prefix: we need "has_sibling" per level from root to here.
+    # Our array only has has_sibling for current node. So we use it for the last segment only.
+    local prefix=""
+    local d=0
+    while [[ $d -lt $depth ]]; do
+      prefix="$prefix$TREE_LINE"
+      ((d++)) || true
+    done
+    if [[ $has_sibling -eq 1 ]]; then
+      prefix="$prefix$TREE_BRANCH"
+    else
+      prefix="$prefix$TREE_LAST"
+    fi
+
+    local display_name="$name"
+    [[ $isdir -eq 1 ]] && display_name="$name/"
+
+    if [[ $i -eq $cursor ]]; then
+      echo -e "${BOLD}${GREEN}> ${NORM}${prefix}${BOLD}${display_name}${NORM}  ${YELLOW}${size}${NORM}"
+    else
+      if [[ $isdir -eq 1 ]]; then
+        [[ $expanded -eq 1 ]] && echo -e "  ${prefix}${BLUE}${display_name}${NORM}  ${DIM}${size}${NORM}" || echo -e "  ${prefix}${CYAN}${display_name}${NORM}  ${DIM}${size}${NORM}"
+      else
+        echo -e "  ${prefix}${display_name}  ${DIM}${size}${NORM}"
+      fi
+    fi
+    ((i++)) || true
+  done
+}
+
+# Ensure cursor is in valid range
+clamp_cursor() {
+  local total=${#visible_names[@]}
+  if [[ $cursor -ge $total ]]; then
+    cursor=$(( total - 1 ))
+  fi
+  [[ $cursor -lt 0 ]] && cursor=0
+}
+
+main_loop() {
+  local key
+  while true; do
+    build_visible_tree
+    clamp_cursor
+    render
+
+    key=""
+    read -rsn 1 key || key="q"
+    if [[ "$key" == $'\x1b' ]]; then
+      read -rsn 2 key
+      case "$key" in
+        '[A') # Up
+          ((cursor--)) || true
+          [[ $cursor -lt 0 ]] && cursor=0
+          ;;
+        '[B') # Down
+          ((cursor++)) || true
+          ;;
+        '[C') # Right - expand
+          local path="${visible_paths[$cursor]}"
+          local isdir=${visible_isdir[$cursor]}
+          if [[ $isdir -eq 1 ]]; then
+            set_expanded "$path"
+          fi
+          ;;
+        '[D') # Left - collapse
+          local path="${visible_paths[$cursor]}"
+          local isdir=${visible_isdir[$cursor]}
+          if [[ $isdir -eq 1 ]]; then
+            set_collapsed "$path"
+          else
+            # Move cursor to parent directory row if possible
+            local depth=${visible_depths[$cursor]}
+            local i=$cursor
+            while [[ $i -gt 0 ]]; do
+              ((i--)) || true
+              if [[ ${visible_depths[$i]} -lt $depth && ${visible_isdir[$i]} -eq 1 ]]; then
+                cursor=$i
+                set_collapsed "${visible_paths[$i]}"
+                break
+              fi
+            done
+          fi
+          ;;
+      esac
+    else
+      case "$key" in
+        'q'|'Q') exit 0 ;;
+        '')
+          # Enter
+          local path="${visible_paths[$cursor]}"
+          local isdir=${visible_isdir[$cursor]}
+          if [[ $isdir -eq 1 ]]; then
+            if is_expanded "$path"; then
+              set_collapsed "$path"
+            else
+              set_expanded "$path"
+            fi
+          fi
+          ;;
+        'j') ((cursor++)) || true ;;
+        'k') ((cursor--)) || true; [[ $cursor -lt 0 ]] && cursor=0 ;;
+      esac
+    fi
+  done
+}
+
+# Start with root expanded so we see first level
+expanded_paths="$ROOT"$'\n'
+main_loop
