@@ -49,6 +49,13 @@ DISK_AVAIL="?"
 DISK_PCT=0
 declare -a visible_depths visible_paths visible_names visible_sizes visible_isdir visible_expanded visible_has_sibling
 
+# Chart view state (for per-directory usage chart)
+CHART_ACTIVE=0
+CHART_DIR=""
+CHART_TOTAL_BYTES=0
+CHART_MESSAGE=""
+declare -a chart_labels chart_bytes
+
 # Reserve this many lines for header (gauge, title, help). Tree uses the rest.
 HEADER_LINES=14
 
@@ -111,6 +118,64 @@ draw_disk_gauge() {
   echo -e "${DIM}   \\___/${NORM}\033[K"
 }
 
+# Render a simple horizontal "pie" chart for the currently selected directory.
+# Uses global CHART_DIR, chart_labels, chart_bytes, CHART_TOTAL_BYTES, CHART_MESSAGE.
+render_chart_view() {
+  # Clear to a fresh screen so the chart is visually distinct from the tree.
+  if command -v tput >/dev/null 2>&1; then
+    tput clear 2>/dev/null || printf '\033[2J\033[H'
+  else
+    printf '\033[2J\033[H'
+  fi
+
+  # Header: overall disk gauge plus chart title/instructions.
+  draw_disk_gauge "$DISK_TOTAL" "$DISK_USED" "$DISK_AVAIL" "$DISK_PCT"
+  echo -e "\033[K"
+  echo -e "${BOLD}${CYAN}disky${NORM} — usage inside ${DIM}$CHART_DIR${NORM}\033[K"
+  echo -e "${DIM}c close chart  q quit${NORM}\033[K"
+  echo -e "\033[K"
+
+  if [[ -n "$CHART_MESSAGE" ]]; then
+    echo -e "${YELLOW}$CHART_MESSAGE${NORM}\033[K"
+    printf '\033[J'
+    return
+  fi
+
+  local count=${#chart_labels[@]}
+  if [[ $count -eq 0 || $CHART_TOTAL_BYTES -le 0 ]]; then
+    echo -e "${YELLOW}No size data available for $CHART_DIR${NORM}\033[K"
+    printf '\033[J'
+    return
+  fi
+
+  local bar_width=40
+  local i=0
+  while [[ $i -lt $count ]]; do
+    local label="${chart_labels[$i]}"
+    local bytes=${chart_bytes[$i]}
+    local pct=0
+    if [[ $CHART_TOTAL_BYTES -gt 0 ]]; then
+      pct=$(( bytes * 100 / CHART_TOTAL_BYTES ))
+    fi
+    if [[ $bytes -gt 0 && $pct -eq 0 ]]; then
+      pct=1
+    fi
+    local filled=$(( pct * bar_width / 100 ))
+    [[ $filled -lt 0 ]] && filled=0
+    [[ $filled -gt $bar_width ]] && filled=$bar_width
+    local empty=$(( bar_width - filled ))
+    [[ $empty -lt 0 ]] && empty=0
+    local bar
+    bar="$(printf '%*s' "$filled" '' | tr ' ' '#')"
+    bar="$bar$(printf '%*s' "$empty" '' | tr ' ' ' ')"
+    local human
+    human=$(bytes_to_human "$bytes")
+    printf "  %-20s %5s%% [%s] %6s\033[K\n" "$label" "$pct" "$bar" "$human"
+    ((i++)) || true
+  done
+  printf '\033[J'
+}
+
 # Convert bytes to human-readable (K/M/G) for fast file sizes.
 bytes_to_human() {
   local bytes=$1
@@ -123,6 +188,78 @@ bytes_to_human() {
   else
     echo "${bytes}B"
   fi
+}
+
+# Build chart data for a given directory path into global chart_* vars.
+build_chart_for_directory() {
+  local dir="$1"
+  CHART_MESSAGE=""
+  CHART_TOTAL_BYTES=0
+  chart_labels=()
+  chart_bytes=()
+
+  [[ -z "$dir" || ! -d "$dir" ]] && { CHART_MESSAGE="Not a directory: $dir"; return 1; }
+
+  # Collect entries first to know how many we have.
+  local -a items
+  local item
+  local count=0
+  while IFS= read -r item; do
+    [[ -z "$item" ]] && continue
+    [[ "$item" == "." || "$item" == ".." ]] && continue
+    items+=("$item")
+    ((count++)) || true
+  done < <(ls -A "$dir" 2>/dev/null)
+
+  if [[ $count -eq 0 ]]; then
+    CHART_MESSAGE="Directory is empty."
+    return 0
+  fi
+
+  if [[ $count -gt $LARGE_LIST_THRESHOLD ]]; then
+    CHART_MESSAGE="Directory has $count entries; chart disabled for performance."
+    return 0
+  fi
+
+  local max_items_for_chart=30
+  local total_bytes=0
+  local other_bytes=0
+  local other_count=0
+  local idx=0
+
+  for item in "${items[@]}"; do
+    local full="$dir/$item"
+    local size_bytes
+    if [[ -d "$full" ]]; then
+      # du -sk reports size in KiB; convert to bytes.
+      local kb
+      kb=$(du -sk "$full" 2>/dev/null | awk 'NR==1 {print $1}')
+      [[ -z "$kb" ]] && kb=0
+      size_bytes=$(( kb * 1024 ))
+    else
+      size_bytes=$(stat -f%z "$full" 2>/dev/null || echo "0")
+      [[ "$size_bytes" == "?" ]] && size_bytes=0
+    fi
+
+    total_bytes=$(( total_bytes + size_bytes ))
+
+    if [[ $idx -lt $max_items_for_chart ]]; then
+      chart_labels+=( "$item" )
+      chart_bytes+=( "$size_bytes" )
+    else
+      other_bytes=$(( other_bytes + size_bytes ))
+      ((other_count++)) || true
+    fi
+    ((idx++)) || true
+  done
+
+  if [[ $other_bytes -gt 0 ]]; then
+    chart_labels+=( "Other ($other_count more)" )
+    chart_bytes+=( "$other_bytes" )
+  fi
+
+  CHART_TOTAL_BYTES=$total_bytes
+  return 0
 }
 
 # Encode path for use as cache filename (safe for all chars)
@@ -349,7 +486,7 @@ render() {
   draw_disk_gauge "$DISK_TOTAL" "$DISK_USED" "$DISK_AVAIL" "$DISK_PCT"
   echo -e "\033[K"
   echo -e "${BOLD}${CYAN}disky${NORM} — disc space — ${DIM}$ROOT${NORM}\033[K"
-  echo -e "${DIM}↑/↓ move  Enter/→ expand  ← collapse  u up  q quit${NORM}\033[K"
+  echo -e "${DIM}↑/↓ move  Enter/→ expand  ← collapse  u up  g/p chart  q quit${NORM}\033[K"
   echo -e "\033[K"
 
   local total=${#visible_names[@]}
@@ -505,75 +642,138 @@ main_loop() {
   saved_stty=$(stty -g 2>/dev/null)
   stty -icanon -echo 2>/dev/null
   while true; do
-    if [[ $TREE_DIRTY -eq 1 ]]; then
-      if [[ $NAVIGATING_UP -eq 1 ]]; then
-        show_loading_screen
-        build_visible_tree
-        NAVIGATING_UP=0
-      else
-        build_visible_tree
+    if [[ $CHART_ACTIVE -eq 0 ]]; then
+      if [[ $TREE_DIRTY -eq 1 ]]; then
+        if [[ $NAVIGATING_UP -eq 1 ]]; then
+          show_loading_screen
+          build_visible_tree
+          NAVIGATING_UP=0
+        else
+          build_visible_tree
+        fi
+        TREE_DIRTY=0
       fi
-      TREE_DIRTY=0
+      clamp_cursor
+      render
+    else
+      # Chart view uses its own renderer; tree state is preserved.
+      render_chart_view
     fi
-    clamp_cursor
-    render
 
     key=""
     read -rsn 1 key || key="q"
+
+    # Open chart on 'g'/'G' (or ASCII 103/71) when in tree view
+    keycode=$(printf '%d' "'$key" 2>/dev/null || echo "0")
+    if [[ "${CHART_ACTIVE:-0}" -eq 0 ]]; then
+      if [[ "$key" == "g" || "$key" == "G" || "$key" == "p" || "$key" == "P" || "$keycode" == "103" || "$keycode" == "71" || "$keycode" == "112" || "$keycode" == "80" ]]; then
+        target_dir="$ROOT"
+        if [[ ${#visible_names[@]} -gt 0 ]]; then
+          row_path="${visible_paths[$cursor]}"
+          if [[ -d "$row_path" ]]; then
+            target_dir="$row_path"
+          else
+            target_dir=$(cd "$(dirname "$row_path")" 2>/dev/null && pwd)
+            [[ -z "$target_dir" ]] && target_dir="$ROOT"
+          fi
+        fi
+        if [[ -d "$target_dir" ]]; then
+          CHART_DIR="$target_dir"
+          build_chart_for_directory "$CHART_DIR"
+          CHART_ACTIVE=1
+        fi
+        continue
+      fi
+    fi
+
     if [[ "$key" == $'\x1b' ]]; then
       read -rsn 2 key || key=""
-      case "$key" in
-        *A) # Up
-          ((cursor--)) || true
-          [[ $cursor -lt 0 ]] && cursor=0
-          ;;
-        *B) # Down
-          ((cursor++)) || true
-          ;;
-        *C) # Right - expand (or go up on "..")
-          [[ ${#visible_names[@]} -gt 0 ]] && nav_up_or_expand
-          ;;
-        *D) # Left - collapse (no-op on parent row)
-          [[ ${#visible_names[@]} -eq 0 ]] && continue
-          local path="${visible_paths[$cursor]}"
-          local isdir=${visible_isdir[$cursor]}
-          if [[ $cursor -eq 0 && "$ROOT" != "/" ]]; then
-            :
-          elif [[ $isdir -eq 1 ]]; then
-            set_collapsed "$path"
-          else
-            # Move cursor to parent directory row if possible
-            local depth=${visible_depths[$cursor]}
-            local i=$cursor
-            while [[ $i -gt 0 ]]; do
-              ((i--)) || true
-              if [[ ${visible_depths[$i]} -lt $depth && ${visible_isdir[$i]} -eq 1 ]]; then
-                cursor=$i
-                set_collapsed "${visible_paths[$i]}"
-                break
-              fi
-            done
-          fi
-          ;;
-      esac
-    else
-      case "$key" in
-        'q'|'Q') exit 0 ;;
-        'u'|'U') do_go_up ;;
-        ''|$'\n'|$'\r')
-          # Enter: row 0 when not at / is always "go up"; otherwise enter directory
-          [[ ${#visible_names[@]} -eq 0 ]] && continue
-          if [[ $cursor -eq 0 && "$ROOT" != "/" ]]; then
-            do_go_up
-          else
+      if [[ $CHART_ACTIVE -eq 0 ]]; then
+        case "$key" in
+          *A) # Up
+            ((cursor--)) || true
+            [[ $cursor -lt 0 ]] && cursor=0
+            ;;
+          *B) # Down
+            ((cursor++)) || true
+            ;;
+          *C) # Right - expand (or go up on "..")
+            [[ ${#visible_names[@]} -gt 0 ]] && nav_up_or_expand
+            ;;
+          *D) # Left - collapse (no-op on parent row)
+            [[ ${#visible_names[@]} -eq 0 ]] && continue
             local path="${visible_paths[$cursor]}"
             local isdir=${visible_isdir[$cursor]}
-            [[ $isdir -eq 1 ]] && do_go_into "$path"
-          fi
-          ;;
-        'j') ((cursor++)) || true ;;
-        'k') ((cursor--)) || true; [[ $cursor -lt 0 ]] && cursor=0 ;;
-      esac
+            if [[ $cursor -eq 0 && "$ROOT" != "/" ]]; then
+              :
+            elif [[ $isdir -eq 1 ]]; then
+              set_collapsed "$path"
+            else
+              # Move cursor to parent directory row if possible
+              local depth=${visible_depths[$cursor]}
+              local i=$cursor
+              while [[ $i -gt 0 ]]; do
+                ((i--)) || true
+                if [[ ${visible_depths[$i]} -lt $depth && ${visible_isdir[$i]} -eq 1 ]]; then
+                  cursor=$i
+                  set_collapsed "${visible_paths[$i]}"
+                  break
+                fi
+              done
+            fi
+            ;;
+        esac
+      fi
+    else
+      if [[ $CHART_ACTIVE -eq 1 ]]; then
+        case "$key" in
+          'q'|'Q') exit 0 ;;
+          'c'|'C')
+            # Close chart and return to tree view exactly as before.
+            CHART_ACTIVE=0
+            CHART_DIR=""
+            TREE_DIRTY=1
+            ;;
+        esac
+      else
+        case "$key" in
+          'q'|'Q') exit 0 ;;
+          'u'|'U') do_go_up ;;
+          ''|$'\n'|$'\r')
+            # Enter: row 0 when not at / is always "go up"; otherwise enter directory
+            [[ ${#visible_names[@]} -eq 0 ]] && continue
+            if [[ $cursor -eq 0 && "$ROOT" != "/" ]]; then
+              do_go_up
+            else
+              local path="${visible_paths[$cursor]}"
+              local isdir=${visible_isdir[$cursor]}
+              [[ $isdir -eq 1 ]] && do_go_into "$path"
+            fi
+            ;;
+          'j') ((cursor++)) || true ;;
+          'k') ((cursor--)) || true; [[ $cursor -lt 0 ]] && cursor=0 ;;
+          *)
+            # Second chance: 'g'/'G' to open chart (in case early check missed it)
+            if [[ "$key" == "g" || "$key" == "G" || "$key" == "p" || "$key" == "P" || "$keycode" == "103" || "$keycode" == "71" || "$keycode" == "112" || "$keycode" == "80" ]]; then
+              target_dir="$ROOT"
+              if [[ ${#visible_names[@]} -gt 0 ]]; then
+                row_path="${visible_paths[$cursor]}"
+                if [[ -d "$row_path" ]]; then
+                  target_dir="$row_path"
+                else
+                  target_dir=$(cd "$(dirname "$row_path")" 2>/dev/null && pwd)
+                  [[ -z "$target_dir" ]] && target_dir="$ROOT"
+                fi
+              fi
+              if [[ -d "$target_dir" ]]; then
+                CHART_DIR="$target_dir"
+                build_chart_for_directory "$CHART_DIR"
+                CHART_ACTIVE=1
+              fi
+            fi
+            ;;
+        esac
+      fi
     fi
   done
 }

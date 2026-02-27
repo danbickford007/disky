@@ -13,7 +13,7 @@
    \___/
 
 disky — disc space — /Users/me/Src/disky
-↑/↓ move  Enter/→ expand  ← collapse  u up  q quit
+↑/↓ move  Enter/→ expand  ← collapse  u up  g/p chart  q quit
 
 > ├── .. (parent)  (go up)
   ├── ./  320K
@@ -31,6 +31,7 @@ disky — disc space — /Users/me/Src/disky
 - **Per‑directory navigation**: Pressing Enter/Right on a directory *enters* that directory and rebuilds the tree with it as the new root.
 - **Session caching**: Directory listings and file sizes are cached (per process) so revisiting directories is fast.
 - **Keyboard‑only navigation**: Optimized for arrow keys and `j`/`k`, no mouse required.
+- **Per‑directory usage chart**: Press **g** or **p** on a directory (or file) to open a full‑screen view showing how much space each child uses; press **c** to close the chart and return to the tree.
 
 ---
 
@@ -102,6 +103,7 @@ When the interface starts:
 | **↓** / **j**           | Move cursor down                                                      |
 | **Enter** / **→**       | If on `..`, go to parent directory; otherwise enter the selected directory as new root |
 | **u**                   | Go up to parent directory (same as selecting `..` and pressing Enter) |
+| **g** / **p**           | Open **usage chart** for the selected row’s directory (see below)   |
 | **q**                   | Quit                                                                  |
 
 ### Tree rows
@@ -117,7 +119,20 @@ Each row shows:
 - **Size**:
   - For the root row: a `du -sh` style summary of the whole subtree.
   - For files: a fast stat‑based human size.
-  - For directories: `?` (directory sizes are expensive; use the root size for high‑level estimates).
+  - For directories: recursive size where practical; `?` for very large directories.
+
+---
+
+## Usage chart (g / p)
+
+With the cursor on any row (directory or file), press **g** or **p** to open a **usage chart** for that row’s directory:
+
+- The screen clears and shows a bar chart of how much space each child file and directory uses, with percentages and human‑readable sizes.
+- The chart is for the directory of the selected row (if you’re on a file, it shows that file’s parent directory).
+- Press **c** to close the chart and return to the tree in the same place (same root, cursor, and scroll).
+- Press **q** from the chart to quit the program.
+
+Very large directories may show a message instead of a chart to keep the UI responsive.
 
 ---
 
