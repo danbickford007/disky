@@ -39,7 +39,7 @@ disky — disc space — /Users/me/Src/disky
 ### macOS / Linux (local clone)
 
 ```bash
-git clone https://github.com/your-user/disky.git
+git clone https://github.com/danbickford007/disky.git
 cd disky
 chmod +x disky
 ```
@@ -184,5 +184,5 @@ This updates automatically whenever you change the root directory.
 
 ## License
 
-`disky` is licensed under the **MIT License**.  
+`disky` is licensed under the **MIT License**.
 See the `LICENSE` file for full terms.
