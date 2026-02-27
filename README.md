@@ -184,4 +184,5 @@ Below the gauge:
 
 ## License
 
-TBD — add your preferred open‑source license here (e.g. MIT, Apache‑2.0).
+`disky` is licensed under the **MIT License**.  
+See the `LICENSE` file for full terms.
