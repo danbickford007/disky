@@ -104,7 +104,12 @@ When the interface starts:
 | **Enter** / **→**       | If on `..`, go to parent directory; otherwise enter the selected directory as new root |
 | **u**                   | Go up to parent directory (same as selecting `..` and pressing Enter) |
 | **g** / **p**           | Open **usage chart** for the selected row’s directory (see below)   |
+| **d**                   | Delete the selected file or directory (confirmation screen)          |
 | **q**                   | Quit                                                                  |
+
+### Delete (d)
+
+With a file or directory selected (not `..` or `.`), press **d** to delete. The screen clears and shows a confirmation with a warning. Choose **Enter** or **y** to delete (and return to the tree), or **n** or **Escape** to cancel and return to the tree. Deleting a directory removes it and all its contents.
 
 ### Tree rows
 
